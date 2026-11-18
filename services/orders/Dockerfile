@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1
 # Multi-stage build: dependencies are installed in a builder, and only the
 # virtualenv + code are copied into a small, non-root runtime image.
-FROM python:3.13-slim AS builder
+FROM python:3.15-slim AS builder
 WORKDIR /build
 RUN python -m venv /venv
 ENV PATH=/venv/bin:$PATH
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-FROM python:3.13-slim
+FROM python:3.15-slim
 # Pull in OS security fixes so the Trivy gate has fewer fixable CVEs to flag.
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
