@@ -1,0 +1,15 @@
+# Dependabot opens PRs to update dependencies. Each PR goes through the full CI gate.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /services/orders
+    schedule: {interval: weekly}
+  - package-ecosystem: gomod
+    directory: /services/inventory
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directories: [/services/orders, /services/inventory]
+    schedule: {interval: weekly}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}

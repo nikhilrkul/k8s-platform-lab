@@ -1,0 +1,383 @@
+# End-to-end pipeline.
+#
+#   Pull request:  lint -> tests + diff coverage (>80% on NEW lines) -> SAST on the diff
+#                  -> dependency scans -> deploy review of the whole repo
+#                  -> build images and CVE scan. Any failure blocks the merge.
+#   Push to main:  the same gates, then push images to GHCR, SBOM + signature,
+#                  and a GitOps commit that bumps the dev image tags.
+#                  ArgoCD sees that commit and deploys it to the cluster.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.13"
+  HELM_VERSION: "v4.3.2"
+  KUBECONFORM_VERSION: "v0.8.0"
+  CONFTEST_VERSION: "0.71.1"
+  GITLEAKS_VERSION: "8.30.1"
+  GOVULNCHECK_VERSION: "v1.10.0"
+  # The CVE gate. Any fixable vulnerability at these severities fails the build.
+  # "Fixable" (ignore-unfixed) means a patched version exists, so the fix is in your hands.
+  CVE_SEVERITIES: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+  DIFF_COVERAGE_MIN: "80"
+
+jobs:
+  # ---------------------------------------------------------------- 1. lint
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/orders/requirements-dev.txt
+      - name: Python lint, format and type-check (orders)
+        working-directory: services/orders
+        run: |
+          pip install -r requirements-dev.txt
+          ruff check --output-format=github .
+          ruff format --check .
+          mypy app tests
+      - name: Python lint (tools)
+        run: |
+          pip install pyyaml types-PyYAML
+          ruff check --output-format=github --config tools/ruff.toml tools
+          mypy --strict --ignore-missing-imports tools/deploy_guard.py tools/gocover_to_cobertura.py
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: services/inventory/go.mod
+          cache-dependency-path: services/inventory/go.mod
+      - name: Go lint (inventory)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          working-directory: services/inventory
+      - name: Dockerfile lint (orders)
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: services/orders/Dockerfile
+          ignore: DL3008,DL3005   # allow unpinned apt upgrade; we want the latest security patches
+      - name: Dockerfile lint (inventory)
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: services/inventory/Dockerfile
+      - name: Lint the workflows themselves
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+
+  # ---------------------------------------------------------------- 2. unit tests + coverage
+  test-python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/orders
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # diff-cover needs the base branch history
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/orders/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Unit tests with coverage report (whole codebase must stay >= 80%)
+        run: pytest --junitxml=junit.xml
+      - name: Diff coverage - new and changed lines must be > ${{ env.DIFF_COVERAGE_MIN }}%
+        if: github.event_name == 'pull_request'
+        run: |
+          diff-cover coverage.xml \
+            --compare-branch="origin/${{ github.base_ref }}" \
+            --fail-under="${{ env.DIFF_COVERAGE_MIN }}" \
+            --markdown-report diff-coverage.md
+      - name: Add coverage to the job summary
+        if: always() && github.event_name == 'pull_request'
+        run: cat diff-coverage.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-orders
+          path: |
+            services/orders/coverage.xml
+            services/orders/junit.xml
+            services/orders/diff-coverage.md
+          if-no-files-found: ignore
+
+  test-go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/inventory
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: services/inventory/go.mod
+          cache-dependency-path: services/inventory/go.mod
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Unit tests (race detector on) with coverage report
+        run: |
+          go test -race -covermode=atomic -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tee coverage.txt
+          python3 ../../tools/gocover_to_cobertura.py coverage.out coverage.xml
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {sub("%","",$3); print $3}')
+          echo "Total Go coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { exit !(t >= 80) }' || { echo "::error::Go coverage ${total}% < 80%"; exit 1; }
+      - name: Diff coverage - new and changed lines must be > ${{ env.DIFF_COVERAGE_MIN }}%
+        if: github.event_name == 'pull_request'
+        run: |
+          pip install diff-cover==11.0.3
+          diff-cover coverage.xml \
+            --compare-branch="origin/${{ github.base_ref }}" \
+            --fail-under="${{ env.DIFF_COVERAGE_MIN }}" \
+            --markdown-report diff-coverage.md
+          cat diff-coverage.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-inventory
+          path: |
+            services/inventory/coverage.*
+            services/inventory/diff-coverage.md
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------- 3. security scan of the change
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Semgrep (PR = only findings introduced by this change)
+        run: |
+          pip install semgrep==1.186.0
+          baseline=()
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            baseline=(--baseline-commit "${{ github.event.pull_request.base.sha }}")
+          fi
+          semgrep scan --error --metrics=off "${baseline[@]}" \
+            --config p/python --config p/golang --config p/dockerfile \
+            --config p/kubernetes --config p/github-actions --config p/secrets \
+            --sarif --output semgrep.sarif --text
+      - name: Bandit (Python security linter, whole service)
+        run: pip install bandit==1.9.4 && bandit -r services/orders/app -ll
+      - name: Gitleaks (hard-coded secrets in the commits of this change)
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar xz gitleaks
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            range="${{ github.event.before }}..${{ github.sha }}"
+            git cat-file -e "${{ github.event.before }}" 2>/dev/null || range="${{ github.sha }}"
+          fi
+          ./gitleaks git --redact --verbose --log-opts="$range" .
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------- 4. dependency scans
+  dependencies:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # lets dependency-review comment on the PR
+    steps:
+      - uses: actions/checkout@v7
+      - name: Dependency review (blocks NEW vulnerable or badly-licensed deps in this PR)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: low
+          deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0
+          comment-summary-in-pr: on-failure
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: pip-audit (known CVEs in Python deps)
+        run: pip install pip-audit==2.10.1 && pip-audit --strict -r services/orders/requirements.txt
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: services/inventory/go.mod
+          cache-dependency-path: services/inventory/go.mod
+      - name: govulncheck (CVEs in Go deps and the Go stdlib that your code actually calls)
+        working-directory: services/inventory
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          govulncheck ./...
+      - name: Trivy filesystem scan (lockfiles and manifests in the whole repo)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: ${{ env.CVE_SEVERITIES }}
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore
+
+  # ---------------------------------------------------------------- 5. deploy review (whole repo)
+  deploy-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install kubeconform and conftest
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar xz -C "$HOME/bin" kubeconform
+          curl -sSfL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" | tar xz -C "$HOME/bin" conftest
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+      - name: Render every service x environment (helm lint --strict + values.schema.json)
+        run: ./tools/render.sh build/rendered
+      - name: Schema-validate rendered manifests, including Istio/ArgoCD CRDs
+        run: |
+          kubeconform -strict -summary -output pretty \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            build/rendered deploy/argocd
+      - name: Policy-as-code (OPA/Conftest) - unit-test the policies, then apply them
+        run: |
+          conftest verify -p policy
+          conftest test -p policy --all-namespaces build/rendered/*/*.yaml
+      - name: Deploy guard - nulls, lossy values, broken references, env contract
+        run: |
+          pip install pyyaml==6.0.3 pytest==9.2.0
+          python -m pytest -q tools/tests
+          python tools/deploy_guard.py \
+            --values-glob 'deploy/values/**/*.yaml' \
+            --values-glob 'charts/*/values.yaml' \
+            --rendered build/rendered \
+            --services services
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rendered-manifests
+          path: build/rendered
+
+  # ---------------------------------------------------------------- 6. build + CVE scan the images
+  build-scan:
+    needs: [lint, test-python, test-go, sast, dependencies, deploy-review]
+    # Minikube on an Apple Silicon Mac runs an arm64 node, so build natively on GitHub's
+    # arm64 runner (free for public repos). An amd64 image would fail there with
+    # "exec format error". For multi-arch, use setup-qemu + platforms: linux/amd64,linux/arm64.
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write   # push to GHCR (main only)
+      id-token: write   # keyless cosign signing via GitHub OIDC (main only)
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [orders, inventory]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compute image name
+        id: img
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "name=ghcr.io/${repo}/${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+          echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - name: Build (loaded locally so it can be scanned before anything is pushed)
+        uses: docker/build-push-action@v7
+        with:
+          context: services/${{ matrix.service }}
+          load: true
+          push: false
+          tags: ${{ steps.img.outputs.name }}:${{ steps.img.outputs.tag }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Trivy image scan - ANY fixable CVE stops the pipeline here
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.img.outputs.name }}:${{ steps.img.outputs.tag }}
+          severity: ${{ env.CVE_SEVERITIES }}
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          trivyignores: .trivyignore
+      - name: Generate SBOM (what is inside the image)
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          image: ${{ steps.img.outputs.name }}:${{ steps.img.outputs.tag }}
+          format: spdx-json
+          artifact-name: sbom-${{ matrix.service }}.spdx.json
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push image
+        id: push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push "${{ steps.img.outputs.name }}:${{ steps.img.outputs.tag }}"
+          digest=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ steps.img.outputs.name }}:${{ steps.img.outputs.tag }}")
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+      - uses: sigstore/cosign-installer@v4.1.3
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Sign the image (keyless, tied to this workflow's identity)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: cosign sign --yes "${{ steps.push.outputs.digest }}"
+
+  # ---------------------------------------------------------------- 7. GitOps: hand over to ArgoCD
+  gitops-bump-dev:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Point dev at the new image tags
+        run: |
+          tag="${GITHUB_SHA::7}"
+          repo="${GITHUB_REPOSITORY,,}"
+          for svc in orders inventory; do
+            f="deploy/values/${svc}/values-dev.yaml"
+            yq -i ".image.tag = \"${tag}\" | .image.repository = \"ghcr.io/${repo}/${svc}\"" "$f"
+          done
+          git diff --stat
+      - name: Commit and push (ArgoCD auto-syncs dev from this commit)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/values
+          if git diff --cached --quiet; then echo "nothing to bump"; exit 0; fi
+          # Pushes made with GITHUB_TOKEN don't trigger new workflow runs, so this can't loop.
+          git commit -m "deploy(dev): ${GITHUB_SHA::7} [skip ci]"
+          git push

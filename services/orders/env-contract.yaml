@@ -1,0 +1,5 @@
+# The contract between this app and the platform: every env var the code reads.
+# tools/deploy_guard.py checks (1) the code reads nothing that isn't listed here and
+# (2) the rendered Kubernetes manifests provide every `required` var for every env.
+required: [INVENTORY_URL, API_KEY]
+optional: [LOG_LEVEL, FEATURE_DISCOUNTS, DISCOUNT_PERCENT, REQUEST_TIMEOUT_MS, APP_VERSION]

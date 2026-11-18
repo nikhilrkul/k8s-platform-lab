@@ -1,0 +1,6 @@
+# Accepted CVE exceptions. Every entry needs a reason, an owner and an expiry date,
+# and it goes through code review like any other change. Trivy re-reports the CVE
+# after the expiry date.
+#
+# Format:
+#   CVE-YYYY-NNNNN exp:YYYY-MM-DD   # reason, ticket, owner

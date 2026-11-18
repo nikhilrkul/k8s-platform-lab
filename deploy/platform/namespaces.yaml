@@ -1,0 +1,17 @@
+# The label istio-injection=enabled makes Istio's mutating webhook add an Envoy
+# sidecar to every pod created in these namespaces.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop-dev
+  labels:
+    istio-injection: enabled
+    env: dev
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop-prod
+  labels:
+    istio-injection: enabled
+    env: prod

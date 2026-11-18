@@ -1,0 +1,12 @@
+{{ include "microservice.fullname" . }} is deployed to namespace {{ .Release.Namespace }} (revision {{ .Release.Revision }}).
+
+  Image:   {{ .Values.image.repository }}:{{ .Values.image.tag }}
+{{- if .Values.istio.canary.enabled }}
+  Canary:  {{ .Values.image.repository }}:{{ .Values.istio.canary.imageTag }} receiving {{ .Values.istio.canary.weight }}% of traffic
+{{- end }}
+
+Useful commands:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "microservice.fullname" . }}
+  helm -n {{ .Release.Namespace }} history {{ .Release.Name }}
+  helm -n {{ .Release.Namespace }} rollback {{ .Release.Name }} <REVISION>
+  helm -n {{ .Release.Namespace }} test {{ .Release.Name }}

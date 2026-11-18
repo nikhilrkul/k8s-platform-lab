@@ -1,0 +1,12 @@
+apiVersion: v2
+name: microservice
+description: >
+  Reusable chart for one HTTP microservice: Deployment (stable + optional canary),
+  Service, ConfigMap, Secret or SealedSecret, ServiceAccount, HPA, PDB and the Istio
+  VirtualService / DestinationRule / AuthorizationPolicy that sit in front of it.
+type: application
+# Bump `version` whenever the chart's templates change. `appVersion` is informational;
+# the image tag that actually ships comes from values (image.tag).
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"

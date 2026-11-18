@@ -1,0 +1,19 @@
+{{- if .Values.pdb.enabled }}
+{{- $replicas := ternary .Values.autoscaling.minReplicas .Values.replicaCount .Values.autoscaling.enabled }}
+{{- if ge (int .Values.pdb.minAvailable) (int $replicas) }}
+{{- fail (printf "pdb.minAvailable (%d) must be lower than the replica count (%d), or node drains will hang forever" (int .Values.pdb.minAvailable) (int $replicas)) }}
+{{- end }}
+# PodDisruptionBudget: during voluntary disruptions (node drain, cluster upgrade)
+# keep at least minAvailable pods running.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "microservice.fullname" . }}
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "microservice.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,12 @@
+image:
+  repository: local/inventory
+  tag: "v1"
+  pullPolicy: Never
+containerPort: 8080
+replicaCount: 2
+config:
+  PORT: "8080"
+  SEED_STOCK: "BOOK-1:50:1250,PEN-2:200:99"
+istio:
+  authorizationPolicy:
+    allowedServiceAccounts: ["orders"]

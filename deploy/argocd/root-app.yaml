@@ -1,0 +1,22 @@
+# App of Apps: the ONLY thing you `kubectl apply` by hand. ArgoCD then reads
+# deploy/argocd/apps/ from git and creates everything else from there.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/nikhilrkul/k8s-platform-lab.git
+    targetRevision: main
+    path: deploy/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

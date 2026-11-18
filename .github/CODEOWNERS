@@ -1,0 +1,4 @@
+# Owners must approve PRs that touch these paths (enable "Require review from Code Owners").
+*                    @nikhilrkul
+/deploy/values/*/values-prod.yaml  @nikhilrkul
+/policy/             @nikhilrkul

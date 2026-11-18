@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "microservice.fullname" . }}
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+    version: stable
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  # When the HPA is on, it owns replicas. Setting both makes them fight on every sync.
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ .Values.strategy.maxSurge }}
+      maxUnavailable: {{ .Values.strategy.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "microservice.selectorLabels" . | nindent 6 }}
+      version: stable
+  template:
+    {{- include "microservice.podTemplate" (dict "root" . "track" "stable" "tag" .Values.image.tag) | nindent 4 }}
+{{- if .Values.istio.canary.enabled }}
+{{- $canaryTag := required "istio.canary.imageTag is required when the canary is enabled" .Values.istio.canary.imageTag }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "microservice.fullname" . }}-canary
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+    version: canary
+spec:
+  replicas: {{ .Values.istio.canary.replicaCount }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      {{- include "microservice.selectorLabels" . | nindent 6 }}
+      version: canary
+  template:
+    {{- include "microservice.podTemplate" (dict "root" . "track" "canary" "tag" $canaryTag) | nindent 4 }}
+{{- end }}

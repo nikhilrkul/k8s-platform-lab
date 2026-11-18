@@ -1,0 +1,58 @@
+# Mesh-wide mutual TLS. STRICT = sidecars refuse any plaintext connection, so every
+# pod-to-pod call is encrypted and carries a verifiable workload identity.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+---
+# Zero-trust baseline: an empty ALLOW policy matches nothing, so it denies everything in
+# the namespace. Each service's chart then adds an AuthorizationPolicy naming who may call it.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: shop-dev
+spec: {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: shop-prod
+spec: {}
+---
+# The single front door. `minikube tunnel` gives the ingress gateway's LoadBalancer
+# Service the address 127.0.0.1 on your Mac.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: shop-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "dev.shop.local"
+        - "shop.local"
+        - "lab.shop.local"
+---
+# Mesh telemetry: send traces to Jaeger, sampling 100% because this is a lab.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  tracing:
+    - providers:
+        - name: jaeger   # defined in bootstrap/istio-config.yaml (meshConfig.extensionProviders)
+      randomSamplingPercentage: 100.0

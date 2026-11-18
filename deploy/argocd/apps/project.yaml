@@ -1,0 +1,25 @@
+# AppProject = guardrails for a team: which repos it may deploy from, which namespaces
+# it may deploy to, and which cluster-scoped kinds it may create.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: shop
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  description: The shop microservices and their platform config
+  sourceRepos:
+    - https://github.com/nikhilrkul/k8s-platform-lab.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: shop-dev
+    - server: https://kubernetes.default.svc
+      namespace: shop-prod
+    - server: https://kubernetes.default.svc
+      namespace: istio-system
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  orphanedResources:
+    warn: true

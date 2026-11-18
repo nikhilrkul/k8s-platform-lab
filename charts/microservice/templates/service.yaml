@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "microservice.fullname" . }}
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  # The selector has no `version` label, so it matches stable AND canary pods.
+  # Istio's DestinationRule subsets then decide the split by weight.
+  selector:
+    {{- include "microservice.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: {{ .Values.service.portName }}
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP

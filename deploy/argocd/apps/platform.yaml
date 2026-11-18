@@ -1,0 +1,26 @@
+# Namespaces, quotas, mTLS, deny-all and the ingress Gateway. Sync wave -1 makes this
+# land before the services (wave 0) that depend on it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: shop
+  source:
+    repoURL: https://github.com/nikhilrkul/k8s-platform-lab.git
+    targetRevision: main
+    path: deploy/platform
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff: {duration: 10s, factor: 2, maxDuration: 3m}

@@ -1,0 +1,24 @@
+# orders in DEV. CI rewrites image.tag on every merge to main (GitOps), and ArgoCD
+# auto-syncs dev. Every config value is a quoted string; the chart schema enforces it.
+image:
+  repository: ghcr.io/nikhilrkul/k8s-platform-lab/orders
+  tag: "bootstrap"   # replaced by CI with the git SHA
+
+containerPort: 8000
+replicaCount: 2
+
+config:
+  INVENTORY_URL: "http://inventory"
+  LOG_LEVEL: "DEBUG"
+  FEATURE_DISCOUNTS: "true"
+  DISCOUNT_PERCENT: "10"
+  REQUEST_TIMEOUT_MS: "2000"
+
+# API_KEY comes from secrets-dev.yaml (a SealedSecret made by `make seal-secrets`).
+
+istio:
+  gateway:
+    enabled: true
+    hosts: ["dev.shop.local"]
+  authorizationPolicy:
+    allowIngressGateway: true

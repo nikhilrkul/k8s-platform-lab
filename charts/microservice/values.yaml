@@ -1,0 +1,138 @@
+# Defaults for one microservice. Every value here is validated by values.schema.json,
+# so a typo, a null or a wrong type fails at `helm lint` / `helm template` time,
+# long before Kubernetes sees it.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/nikhilrkul/changeme
+  # Required. CI writes the immutable git-SHA tag here. "latest" is rejected by the schema.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 2
+containerPort: 8080
+
+# Plain-text settings. They become a ConfigMap and are loaded as env vars.
+# The schema forces every value to be a STRING: write "true", "8080", "1000000".
+# Unquoted values are lossy here: 1000000 can render as 1e+06 and `yes` can turn into true.
+config: {}
+
+# Sensitive settings.
+#  - secret.create=true    : Helm makes a plain Secret from secret.data (local experiments only;
+#                            never commit real values to git).
+#  - sealedSecret.enabled  : GitOps-safe. encryptedData comes from `make seal-secrets`, and only
+#                            the in-cluster controller can decrypt it.
+#  - existingSecretName    : reference a Secret managed elsewhere.
+secret:
+  create: false
+  data: {}
+sealedSecret:
+  enabled: false
+  encryptedData: {}
+existingSecretName: ""
+
+# Extra literal env vars (name/value pairs). Values must be strings.
+env: []
+
+service:
+  type: ClusterIP
+  port: 80
+  # Istio picks the protocol from the port name prefix (http-, grpc-, tcp-).
+  portName: http
+
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    failureThreshold: 3
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    # No CPU limit on purpose: CPU limits cause throttling. A memory limit protects the node.
+    memory: 256Mi
+
+serviceAccount:
+  create: true
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+terminationGracePeriodSeconds: 30
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# Rolling-update tuning. maxUnavailable 0 keeps full capacity during a rollout.
+strategy:
+  maxSurge: 1
+  maxUnavailable: 0
+
+istio:
+  enabled: true
+  # Expose through the shared ingress Gateway (edge services only).
+  gateway:
+    enabled: false
+    name: istio-system/shop-gateway
+    hosts: []
+  timeout: 3s
+  retries:
+    attempts: 2
+    perTryTimeout: 1s
+    retryOn: "5xx,connect-failure,reset"
+  # Circuit breaker: eject a pod after consecutive 5xx errors.
+  outlierDetection:
+    consecutive5xxErrors: 5
+    interval: 10s
+    baseEjectionTime: 30s
+  # Chaos testing: inject delays or errors to see how callers behave.
+  faultInjection:
+    enabled: false
+    delay:
+      percentage: 0
+      fixedDelay: 2s
+    abort:
+      percentage: 0
+      httpStatus: 503
+  # Canary: a second Deployment (label version=canary) that gets `weight`% of traffic.
+  canary:
+    enabled: false
+    weight: 10
+    imageTag: ""
+    replicaCount: 1
+  # Zero-trust: only these service accounts (same namespace) may call this service.
+  # The service's own account is always allowed so `helm test` works.
+  authorizationPolicy:
+    enabled: true
+    allowedServiceAccounts: []
+    allowIngressGateway: false
+
+helmTest:
+  enabled: true
+  image: curlimages/curl:8.11.1

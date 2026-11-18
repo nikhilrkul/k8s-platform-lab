@@ -1,0 +1,16 @@
+build/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+coverage.out
+coverage.txt
+.coverage
+junit.xml
+diff-coverage.md
+*.tgz
+sealed-key.yaml
+.DS_Store

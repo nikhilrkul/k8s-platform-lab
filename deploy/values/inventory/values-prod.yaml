@@ -1,0 +1,18 @@
+image:
+  repository: ghcr.io/nikhilrkul/k8s-platform-lab/inventory
+  tag: "bootstrap"
+
+containerPort: 8080
+replicaCount: 2
+
+config:
+  PORT: "8080"
+  SEED_STOCK: "BOOK-1:500:1250,PEN-2:2000:99,MUG-3:200:799"
+
+istio:
+  authorizationPolicy:
+    allowedServiceAccounts: ["orders"]
+  canary:
+    enabled: false
+    weight: 10
+    imageTag: ""

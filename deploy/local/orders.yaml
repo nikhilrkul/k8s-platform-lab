@@ -1,0 +1,23 @@
+# Used only by scripts/helm-lab.sh (plain Helm, no ArgoCD). Images are built inside Minikube.
+image:
+  repository: local/orders
+  tag: "v1"
+  pullPolicy: Never
+containerPort: 8000
+replicaCount: 2
+config:
+  INVENTORY_URL: "http://inventory"
+  LOG_LEVEL: "DEBUG"
+  FEATURE_DISCOUNTS: "false"
+  DISCOUNT_PERCENT: "0"
+# A plain Secret is fine for a throwaway local namespace. Never do this in deploy/values.
+secret:
+  create: true
+  data:
+    API_KEY: "local-lab-key"
+istio:
+  gateway:
+    enabled: true
+    hosts: ["lab.shop.local"]
+  authorizationPolicy:
+    allowIngressGateway: true

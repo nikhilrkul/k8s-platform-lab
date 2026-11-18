@@ -1,0 +1,21 @@
+# Used by: istioctl install -f bootstrap/istio-config.yaml
+# The "demo" profile installs istiod plus an ingress and an egress gateway, with
+# lab-friendly settings. Production would use the "default" profile and tune resources.
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  profile: demo
+  meshConfig:
+    accessLogFile: /dev/stdout          # Envoy access logs: `kubectl logs <pod> -c istio-proxy`
+    enableTracing: true
+    outboundTrafficPolicy:
+      mode: REGISTRY_ONLY               # pods may only call hosts the mesh knows about
+    extensionProviders:
+      - name: jaeger
+        opentelemetry:
+          service: jaeger-collector.istio-system.svc.cluster.local
+          port: 4317
+  components:
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: false                  # not needed for this lab; saves memory

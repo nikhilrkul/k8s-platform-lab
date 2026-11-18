@@ -1,0 +1,49 @@
+# OPTIONAL: an AI code reviewer that comments on each PR, on top of the deterministic gates.
+# It reads the WHOLE repo, not just the diff, so it can spot cross-file problems
+# (a renamed env var still referenced in a values file, a nullable field that a caller
+# assumes is set). It only comments. The hard gates live in ci.yaml.
+# Turn it on by adding an ANTHROPIC_API_KEY repository secret. Without it, the job skips.
+name: ai-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that the API key is configured
+        id: key
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: echo "present=$([[ -n "$KEY" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.key.outputs.present == 'true'
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        if: steps.key.outputs.present == 'true'
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review PR #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            Read the diff, then check it against the WHOLE codebase. Focus on what would
+            fail at deploy time or at runtime, not on style:
+            - null/None/nil values that can reach code assuming a value; false-y values
+              ("false", "0", "") handled as truthy, or the other way round
+            - lossy conversions: float money, int overflow, YAML scalars that change type
+              (yes/no, 0755, 1.10, 1e+06), truncated strings
+            - env vars, ConfigMap keys or Secret keys that code reads but that the Helm values
+              for some environment don't provide (see services/*/env-contract.yaml)
+            - Helm/Kubernetes/Istio mismatches: selectors, ports, subsets, service accounts in
+              AuthorizationPolicies, probes that can't succeed
+            - backwards-incompatible API changes between orders and inventory
+            Leave inline comments for concrete problems only, then one summary comment.
+          claude_args: "--max-turns 30"

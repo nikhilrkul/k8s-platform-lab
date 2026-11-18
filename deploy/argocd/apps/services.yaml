@@ -1,0 +1,61 @@
+# ApplicationSet = a template that stamps out one ArgoCD Application per
+# (service x environment): orders-dev, orders-prod, inventory-dev, inventory-prod.
+# Adding a service means adding one line to the list below.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: shop-services
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - matrix:
+        generators:
+          - list:
+              elements:
+                - {service: orders}
+                - {service: inventory}
+          - list:
+              elements:
+                - {env: dev, namespace: shop-dev, autoSync: "true"}
+                - {env: prod, namespace: shop-prod, autoSync: "false"}
+  template:
+    metadata:
+      name: '{{.service}}-{{.env}}'
+      labels:
+        env: '{{.env}}'
+        service: '{{.service}}'
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: shop
+      source:
+        repoURL: https://github.com/nikhilrkul/k8s-platform-lab.git
+        targetRevision: main
+        path: charts/microservice
+        helm:
+          releaseName: '{{.service}}'
+          valueFiles:
+            - ../../deploy/values/{{.service}}/values-{{.env}}.yaml
+            - ../../deploy/values/{{.service}}/secrets-{{.env}}.yaml
+          ignoreMissingValueFiles: true
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{.namespace}}'
+      syncPolicy:
+        syncOptions:
+          - ServerSideApply=true
+          - PruneLast=true
+        retry:
+          limit: 3
+          backoff: {duration: 10s, factor: 2, maxDuration: 2m}
+  # Dev deploys itself on every commit. Prod waits for a human to press Sync.
+  templatePatch: |
+    {{- if eq .autoSync "true" }}
+    spec:
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+    {{- end }}

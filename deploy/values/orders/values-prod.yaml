@@ -1,0 +1,30 @@
+# orders in PROD. Promotion = a PR that copies the tested dev tag here.
+# ArgoCD does NOT auto-sync prod: a human clicks Sync (or runs `argocd app sync`).
+image:
+  repository: ghcr.io/nikhilrkul/k8s-platform-lab/orders
+  tag: "bootstrap"
+
+containerPort: 8000
+
+config:
+  INVENTORY_URL: "http://inventory"
+  LOG_LEVEL: "INFO"
+  FEATURE_DISCOUNTS: "false"
+  DISCOUNT_PERCENT: "0"
+  REQUEST_TIMEOUT_MS: "1500"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  minAvailable: 1
+
+istio:
+  gateway:
+    enabled: true
+    hosts: ["shop.local"]
+  authorizationPolicy:
+    allowIngressGateway: true

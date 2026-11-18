@@ -1,0 +1,54 @@
+# Promotion dev -> prod is a pull request, so it gets reviewed, gated and recorded.
+# Run it from the Actions tab: it copies the image tags that are live in dev into the
+# prod values and opens a PR. After the merge, press Sync on the *-prod apps in ArgoCD.
+# Needs: Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests".
+name: promote-to-prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "Services to promote (space separated)"
+        default: "orders inventory"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Copy dev image tags to prod
+        id: copy
+        env:
+          SERVICES: ${{ inputs.services }}
+        run: |
+          summary=""
+          for svc in $SERVICES; do
+            tag=$(yq '.image.tag' "deploy/values/${svc}/values-dev.yaml")
+            repo=$(yq '.image.repository' "deploy/values/${svc}/values-dev.yaml")
+            yq -i ".image.tag = \"${tag}\" | .image.repository = \"${repo}\"" "deploy/values/${svc}/values-prod.yaml"
+            summary="${summary}- ${svc}: \`${tag}\`"$'\n'
+          done
+          {
+            echo "summary<<EOF"
+            echo "$summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Open the promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUMMARY: ${{ steps.copy.outputs.summary }}
+        run: |
+          branch="promote/${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git commit -am "deploy(prod): promote from dev"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "Promote to prod" \
+            --body "$(printf 'Promotes the image tags currently running in dev:\n\n%s\nAfter merging, sync the *-prod applications in ArgoCD.' "$SUMMARY")"

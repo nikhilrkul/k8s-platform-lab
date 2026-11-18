@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "microservice.fullname" . }}
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+{{- if .Values.config }}
+data:
+  {{- range $key, $value := .Values.config }}
+  {{- if kindIs "string" $value }}
+  {{ $key }}: {{ $value | quote }}
+  {{- else }}
+  {{- fail (printf "config.%s must be a quoted string, got %s (%v). Quote it in your values file." $key (kindOf $value) $value) }}
+  {{- end }}
+  {{- end }}
+{{- else }}
+# An empty `data:` would render as null, so emit an explicit empty map.
+data: {}
+{{- end }}

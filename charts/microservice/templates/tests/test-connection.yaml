@@ -1,0 +1,45 @@
+{{- if .Values.helmTest.enabled }}
+# Run with: helm test <release> -n <namespace>
+# ArgoCD ignores helm test hooks, so this only runs when you call it by hand.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "microservice.fullname" . }}-test
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  # Uses the service's own identity, which its AuthorizationPolicy always allows.
+  serviceAccountName: {{ include "microservice.serviceAccountName" . }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: curl
+      image: {{ .Values.helmTest.image }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 32Mi
+      command: ["sh", "-c"]
+      args:
+        - |
+          sleep 3
+          curl -fsS --retry 5 --retry-connrefused http://{{ include "microservice.fullname" . }}:{{ .Values.service.port }}{{ .Values.probes.liveness.path }}
+          rc=$?
+          # With a classic Istio sidecar, the pod only finishes once the proxy exits.
+          curl -fsS -X POST http://127.0.0.1:15020/quitquitquit >/dev/null 2>&1 || true
+          exit $rc
+{{- end }}

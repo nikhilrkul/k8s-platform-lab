@@ -1,0 +1,120 @@
+{{- if .Values.istio.enabled }}
+{{- $fullname := include "microservice.fullname" . }}
+{{- $host := printf "%s.%s.svc.cluster.local" $fullname .Release.Namespace }}
+{{- $canary := .Values.istio.canary }}
+{{- if and .Values.istio.gateway.enabled (not .Values.istio.gateway.hosts) }}
+{{- fail "istio.gateway.enabled is true but istio.gateway.hosts is empty" }}
+{{- end }}
+# VirtualService = HOW traffic is routed: retries, timeouts, fault injection, weights.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ $host }}
+    {{- if .Values.istio.gateway.enabled }}
+    {{- range .Values.istio.gateway.hosts }}
+    - {{ . | quote }}
+    {{- end }}
+    {{- end }}
+  gateways:
+    - mesh  # traffic from other pods inside the mesh
+    {{- if .Values.istio.gateway.enabled }}
+    - {{ .Values.istio.gateway.name }}  # traffic coming in through the ingress gateway
+    {{- end }}
+  http:
+    - name: primary
+      timeout: {{ .Values.istio.timeout }}
+      retries:
+        attempts: {{ .Values.istio.retries.attempts }}
+        perTryTimeout: {{ .Values.istio.retries.perTryTimeout }}
+        retryOn: {{ .Values.istio.retries.retryOn | quote }}
+      {{- with .Values.istio.faultInjection }}
+      {{- if .enabled }}
+      fault:
+        delay:
+          percentage:
+            value: {{ .delay.percentage }}
+          fixedDelay: {{ .delay.fixedDelay }}
+        abort:
+          percentage:
+            value: {{ .abort.percentage }}
+          httpStatus: {{ .abort.httpStatus }}
+      {{- end }}
+      {{- end }}
+      route:
+        - destination:
+            host: {{ $host }}
+            subset: stable
+            port:
+              number: {{ .Values.service.port }}
+          weight: {{ if $canary.enabled }}{{ sub 100 (int $canary.weight) }}{{ else }}100{{ end }}
+        {{- if $canary.enabled }}
+        - destination:
+            host: {{ $host }}
+            subset: canary
+            port:
+              number: {{ .Values.service.port }}
+          weight: {{ $canary.weight }}
+        {{- end }}
+---
+# DestinationRule = WHAT the destinations are (subsets) and how to talk to them
+# (mTLS, connection pools, circuit breaking).
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+spec:
+  host: {{ $host }}
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 100
+    outlierDetection:
+      consecutive5xxErrors: {{ .Values.istio.outlierDetection.consecutive5xxErrors }}
+      interval: {{ .Values.istio.outlierDetection.interval }}
+      baseEjectionTime: {{ .Values.istio.outlierDetection.baseEjectionTime }}
+      maxEjectionPercent: 50
+  subsets:
+    - name: stable
+      labels:
+        version: stable
+    - name: canary
+      labels:
+        version: canary
+{{- if .Values.istio.authorizationPolicy.enabled }}
+---
+# AuthorizationPolicy = WHO may call this service. With an ALLOW policy in place,
+# every caller that does not match a rule is denied (HTTP 403 "RBAC: access denied").
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "microservice.selectorLabels" . | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/{{ .Release.Namespace }}/sa/{{ include "microservice.serviceAccountName" . }}
+              {{- range .Values.istio.authorizationPolicy.allowedServiceAccounts }}
+              - cluster.local/ns/{{ $.Release.Namespace }}/sa/{{ . }}
+              {{- end }}
+              {{- if .Values.istio.authorizationPolicy.allowIngressGateway }}
+              - cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account
+              {{- end }}
+{{- end }}
+{{- end }}

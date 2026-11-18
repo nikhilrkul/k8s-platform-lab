@@ -1,0 +1,32 @@
+# Values for the argo/argo-cd Helm chart, tuned for a laptop.
+global:
+  domain: argocd.local
+configs:
+  params:
+    server.insecure: true            # TLS is terminated by `kubectl port-forward`; fine for a lab
+  cm:
+    timeout.reconciliation: 60s      # how often ArgoCD polls git (use a webhook in real life)
+    # Health check so ArgoCD knows when a SealedSecret has been decrypted.
+    resource.customizations.health.bitnami.com_SealedSecret: |
+      hs = {status = "Healthy", message = "Unsealed"}
+      if obj.status ~= nil and obj.status.conditions ~= nil then
+        for _, c in ipairs(obj.status.conditions) do
+          if c.type == "Synced" and c.status == "False" then
+            hs.status = "Degraded"
+            hs.message = c.message
+          end
+        end
+      end
+      return hs
+dex:
+  enabled: false
+notifications:
+  enabled: false
+redis:
+  resources: {requests: {cpu: 50m, memory: 64Mi}}
+controller:
+  resources: {requests: {cpu: 100m, memory: 256Mi}}
+repoServer:
+  resources: {requests: {cpu: 50m, memory: 128Mi}}
+server:
+  resources: {requests: {cpu: 50m, memory: 64Mi}}

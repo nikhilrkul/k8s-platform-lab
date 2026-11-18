@@ -1,0 +1,25 @@
+version: "2"
+linters:
+  enable:
+    - gosec        # security issues (SAST)
+    - nilerr       # returns nil even though err != nil
+    - nilnil       # returns nil value AND nil error: a null that callers won't expect
+    - errorlint    # wrong error comparisons (== instead of errors.Is)
+    - bodyclose    # unclosed HTTP bodies leak connections
+    - noctx        # HTTP requests without a context can't be cancelled
+    - misspell
+    - revive
+    - unconvert
+    - prealloc
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [gosec, noctx]
+  settings:
+    revive:
+      rules:
+        - name: exported
+formatters:
+  enable:
+    - gofmt
+    - goimports

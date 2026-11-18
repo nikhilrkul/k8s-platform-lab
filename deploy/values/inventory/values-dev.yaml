@@ -1,0 +1,21 @@
+image:
+  repository: ghcr.io/nikhilrkul/k8s-platform-lab/inventory
+  tag: "bootstrap"
+
+containerPort: 8080
+replicaCount: 2
+
+config:
+  PORT: "8080"
+  # SKU:available:priceCents. Parsed strictly: a bad entry crashes the pod on startup.
+  SEED_STOCK: "BOOK-1:50:1250,PEN-2:200:99,MUG-3:20:799"
+
+istio:
+  # Only orders may call inventory. Anything else gets 403 from the sidecar.
+  authorizationPolicy:
+    allowedServiceAccounts: ["orders"]
+  # Lab 6: set enabled true and imageTag to a new SHA to send 10% of traffic to it.
+  canary:
+    enabled: false
+    weight: 10
+    imageTag: ""
