@@ -5,4 +5,4 @@ ruff==0.17.5
 mypy==2.4.1
 bandit==1.9.4
 pip-audit==2.10.1
-diff-cover==11.0.3
+diff-cover==11.0.4
